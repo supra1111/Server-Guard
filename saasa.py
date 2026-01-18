@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import ui, ButtonStyle
-import datetime, time, os, re, io, platform, psutil
+import datetime, time, os, re, io, psutil
 from collections import defaultdict, deque
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -82,31 +82,40 @@ async def get_log_channel(guild):
         ch = await guild.create_text_channel(LOG_CHANNEL)
     return ch
 
-# ================= CARD LOG =================
-async def create_card(member, title, reason):
+# ================= GIF CARD LOG =================
+async def create_gif_card(member, title, reason):
+    frames = []
     avatar_bytes = await member.display_avatar.replace(size=128).read()
     avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((96, 96))
 
-    base = Image.new("RGBA", (700, 220), (25, 25, 40))
-    bg = base.filter(ImageFilter.GaussianBlur(6))
-    bg.paste(base, (0, 0))
+    for i in range(8):
+        base = Image.new("RGBA", (720, 240), (20+i*2, 20+i*2, 40+i*3))
+        bg = base.filter(ImageFilter.GaussianBlur(4))
+        draw = ImageDraw.Draw(bg)
 
-    draw = ImageDraw.Draw(bg)
-    bg.paste(avatar, (30, 60), avatar)
+        bg.paste(avatar, (30, 70), avatar)
+        draw.text((150, 40), title, fill="white")
+        draw.text((150, 95), f"Kullanıcı: {member}", fill="#cccccc")
+        draw.text((150, 135), f"Sebep: {reason}", fill="#ff5555")
 
-    draw.text((150, 40), title, fill="white")
-    draw.text((150, 90), f"Kullanıcı: {member}", fill="#cccccc")
-    draw.text((150, 130), f"Sebep: {reason}", fill="#ff5555")
+        frames.append(bg)
 
     buf = io.BytesIO()
-    bg.save(buf, format="PNG")
+    frames[0].save(
+        buf,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=120,
+        loop=0
+    )
     buf.seek(0)
     return buf
 
 async def log_guard(guild, member, title, reason):
     ch = await get_log_channel(guild)
-    card = await create_card(member, title, reason)
-    await ch.send(file=discord.File(card, "guard.png"))
+    gif = await create_gif_card(member, title, reason)
+    await ch.send(file=discord.File(gif, "guard.gif"))
     guard_logs.appendleft(f"{title} | {member}")
 
 # ================= BUTTON PANELS =================
@@ -117,7 +126,7 @@ class GuardPanel(ui.View):
     async def toggle(self, interaction, guard):
         GUARDS[guard] = not GUARDS[guard]
         await interaction.response.send_message(
-            f"🛡️ **{guard.upper()}** ➜ {'AÇIK' if GUARDS[guard] else 'KAPALI'}",
+            f"🛡️ {guard.upper()} ➜ {'AÇIK' if GUARDS[guard] else 'KAPALI'}",
             ephemeral=True
         )
 
@@ -135,28 +144,24 @@ class GuardPanel(ui.View):
 
 
 class WhitelistPanel(ui.View):
-    def __init__(self, target: discord.Member):
+    def __init__(self, target):
         super().__init__(timeout=30)
         self.target = target
 
-    @ui.button(label="✅ Whitelist Ekle", style=ButtonStyle.success)
-    async def add(self, interaction, button):
+    @ui.button(label="✅ Ekle", style=ButtonStyle.success)
+    async def add(self, i, b):
         WHITELIST_USERS.add(self.target.id)
-        await interaction.response.send_message(
-            f"{self.target.mention} whitelist **eklendi**", ephemeral=True
-        )
+        await i.response.send_message("Whitelist eklendi", ephemeral=True)
 
-    @ui.button(label="❌ Whitelist Çıkar", style=ButtonStyle.danger)
-    async def remove(self, interaction, button):
+    @ui.button(label="❌ Sil", style=ButtonStyle.danger)
+    async def remove(self, i, b):
         WHITELIST_USERS.discard(self.target.id)
-        await interaction.response.send_message(
-            f"{self.target.mention} whitelist **çıkarıldı**", ephemeral=True
-        )
+        await i.response.send_message("Whitelist silindi", ephemeral=True)
 
 # ================= EVENTS =================
 @bot.event
 async def on_ready():
-    print("🛡️ ULTRA GUARD v7.1 AKTİF")
+    print("🛡️ ULTRA GUARD v8 AKTİF")
 
 @bot.event
 async def on_message(message):
@@ -183,38 +188,88 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ================= COMMANDS =================
+# ================= 30+ KOMUT =================
 @bot.command()
-async def guard(ctx):
-    await ctx.send("🛡️ **Ultra Guard Kontrol Paneli**", view=GuardPanel())
+async def guard(ctx): await ctx.send("🛡️ Guard Panel", view=GuardPanel())
 
 @bot.command()
 async def whitelist(ctx, user: discord.Member):
-    if not ctx.author.guild_permissions.administrator:
-        return
-    await ctx.send(
-        f"👤 **{user} için whitelist işlemi**",
-        view=WhitelistPanel(user)
-    )
+    await ctx.send(f"{user} whitelist", view=WhitelistPanel(user))
 
 @bot.command()
-async def stats(ctx):
-    await ctx.send(
-        f"🖥️ **Sistem Bilgisi**\n"
-        f"CPU: {psutil.cpu_percent()}%\n"
-        f"RAM: {psutil.virtual_memory().percent}%\n"
-        f"Uptime: {int(time.time()-START_TIME)} sn"
-    )
+async def ping(ctx): await ctx.send("🏓 Pong")
 
 @bot.command()
-async def avatar(ctx, user: discord.Member = None):
-    user = user or ctx.author
-    await ctx.send(user.display_avatar.url)
+async def uptime(ctx): await ctx.send(f"{int(time.time()-START_TIME)} saniye")
+
+@bot.command()
+async def cpu(ctx): await ctx.send(f"CPU {psutil.cpu_percent()}%")
+
+@bot.command()
+async def ram(ctx): await ctx.send(f"RAM {psutil.virtual_memory().percent}%")
+
+@bot.command()
+async def avatar(ctx, u: discord.Member=None):
+    u = u or ctx.author
+    await ctx.send(u.display_avatar.url)
+
+@bot.command()
+async def ban(ctx, m: discord.Member): await m.ban()
+
+@bot.command()
+async def kick(ctx, m: discord.Member): await m.kick()
+
+@bot.command()
+async def timeout(ctx, m: discord.Member, dk:int):
+    await m.timeout(datetime.timedelta(minutes=dk))
+
+@bot.command()
+async def untimeout(ctx, m: discord.Member):
+    await m.timeout(None)
+
+@bot.command()
+async def purge(ctx, s:int):
+    await ctx.channel.purge(limit=s+1)
+
+@bot.command()
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+
+@bot.command()
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+
+@bot.command()
+async def slowmode(ctx, s:int):
+    await ctx.channel.edit(slowmode_delay=s)
+
+@bot.command()
+async def say(ctx, *, t):
+    await ctx.message.delete()
+    await ctx.send(t)
+
+@bot.command()
+async def serverinfo(ctx):
+    g=ctx.guild
+    await ctx.send(f"{g.name} | {g.member_count} üye")
+
+@bot.command()
+async def userinfo(ctx, u:discord.Member=None):
+    u=u or ctx.author
+    await ctx.send(f"{u} | {u.id}")
+
+@bot.command()
+async def roleinfo(ctx, r:discord.Role):
+    await ctx.send(f"{r.name} | {len(r.members)}")
+
+@bot.command()
+async def channelinfo(ctx):
+    c=ctx.channel
+    await ctx.send(f"{c.name} | {c.id}")
 
 @bot.command()
 async def guardlog(ctx):
-    text = "\n".join(list(guard_logs)[:10]) or "Log yok"
-    await ctx.send(f"```{text}```")
+    await ctx.send("\n".join(list(guard_logs)[:10]) or "Log yok")
 
 # ================= RUN =================
 bot.run(TOKEN)
