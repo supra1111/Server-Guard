@@ -1,292 +1,286 @@
 # ======================================================
-# ================ ULTRA GUARD BOT ===================
-# ====================== ! PREFIX =====================
+# ================ ULTRA GUARD BOT v4.6 =================
+# ====================== PREFIX ! ======================
+# ================== RAILWAY EDITION ==================
 # ======================================================
 
 import discord
-from discord.ext import commands, tasks
-import datetime, time, asyncio
+from discord.ext import commands
+import datetime, time, os, re
 from collections import defaultdict, deque
-from copy import deepcopy
-import matplotlib.pyplot as plt
-import io
-from flask import Flask
+from flask import Flask, request, redirect
 from threading import Thread
 
-app = Flask("")
+# ================= PANEL + KEEP ALIVE =================
+app = Flask("UltraGuardPanel")
+PANEL_PASSWORD = os.getenv("PANEL_PASSWORD", "changeme")
+panel_sessions = set()
 
-@app.route("/")
-def home():
-    return "Bot Alive"
+WHITELIST_USERS = set()
+WHITELIST_ROLES = {"Founder", "Owner", "Admin"}
+guard_logs = deque(maxlen=100)
+
+# GUARD DURUMLARI (PANELDEN KONTROL)
+GUARDS = {
+    "everyone": True,
+    "emoji": True,
+    "link": True,
+    "channel": True,
+    "role": True,
+    "webhook": True,
+    "botraid": True
+}
+
+@app.route("/", methods=["GET", "POST"])
+def panel():
+    ip = request.remote_addr
+
+    # LOGIN
+    if ip not in panel_sessions:
+        if request.method == "POST":
+            if request.form.get("password") == PANEL_PASSWORD:
+                panel_sessions.add(ip)
+                return redirect("/")
+            return "<h3>❌ Yanlış şifre</h3>"
+        return """
+        <h2>🔐 Ultra Guard Panel</h2>
+        <form method="post">
+        <input type="password" name="password" placeholder="Panel Şifresi">
+        <button type="submit">Giriş</button>
+        </form>
+        """
+
+    # POST ACTIONS
+    if request.method == "POST":
+
+        # WHITELIST USERS
+        if "add_user" in request.form:
+            try:
+                WHITELIST_USERS.add(int(request.form["user_id"]))
+            except:
+                pass
+        if "remove_user" in request.form:
+            try:
+                WHITELIST_USERS.discard(int(request.form["user_id"]))
+            except:
+                pass
+
+        # WHITELIST ROLES
+        if "add_role" in request.form:
+            WHITELIST_ROLES.add(request.form["role_name"])
+        if "remove_role" in request.form:
+            WHITELIST_ROLES.discard(request.form["role_name"])
+
+        # GUARD TOGGLES
+        for g in GUARDS:
+            GUARDS[g] = g in request.form
+
+    users_html = "<br>".join(str(u) for u in WHITELIST_USERS) or "Yok"
+    roles_html = "<br>".join(WHITELIST_ROLES)
+    logs_html = "<br>".join(list(guard_logs)[:30]) or "Log yok"
+
+    guard_html = "".join([
+        f'<input type="checkbox" name="{g}" {"checked" if GUARDS[g] else ""}> {g.upper()}<br>'
+        for g in GUARDS
+    ])
+
+    return f"""
+    <h1>🛡️ Ultra Guard Panel</h1>
+
+    <h2>⚙️ Guard Aç / Kapat</h2>
+    <form method="post">
+        {guard_html}
+        <button type="submit">Kaydet</button>
+    </form>
+
+    <hr>
+
+    <h2>👤 Whitelist Users</h2>
+    {users_html}
+    <form method="post">
+        <input name="user_id" placeholder="User ID">
+        <button name="add_user">Ekle</button>
+        <button name="remove_user">Sil</button>
+    </form>
+
+    <h2>🎭 Whitelist Roles</h2>
+    {roles_html}
+    <form method="post">
+        <input name="role_name" placeholder="Role Name">
+        <button name="add_role">Ekle</button>
+        <button name="remove_role">Sil</button>
+    </form>
+
+    <h2>📜 Son Loglar</h2>
+    {logs_html}
+    """
 
 def run():
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
+Thread(target=run).start()
 
-keep_alive()
-
-# ================= CONFIG ============================
-TOKEN = "TOKEN_BOT_HERE"  # <--- Tokeni buraya koy
+# ================= DISCORD CONFIG =====================
+TOKEN = os.getenv("TOKEN")
 PREFIX = "!"
-LOG_CHANNEL = "guard-log"
+LOG_CHANNEL_NAME = "ultra-guard-log"
 TIMEOUT_MIN = 15
 
-ANTI_NUKE_LIMIT = 3
-ANTI_NUKE_WINDOW = 10
-SPIKE_LIMIT = 5
-SPIKE_WINDOW = 12
-BOT_JOIN_LIMIT = 3
-BOT_JOIN_WINDOW = 30
+EVERYONE_LIMIT = 3
+EVERYONE_WINDOW = 15
+EMOJI_LIMIT = 6
+EMOJI_WINDOW = 10
+LINK_LIMIT = 3
+LINK_WINDOW = 15
+WEBHOOK_LIMIT = 3
+WEBHOOK_WINDOW = 10
 
-DM_ALARM = True
-AUTO_LOCKDOWN = True
-
-WHITELIST_USERS = []
-WHITELIST_ROLES = ["Founder", "Owner", "Admin"]
-
-# ================= INTENTS ===========================
-intents = discord.Intents.default()
-intents.members = True
+# ================= INTENTS ============================
+intents = discord.Intents.none()
 intents.guilds = True
+intents.members = True
 intents.message_content = True
+intents.moderation = True
+intents.webhooks = True
 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
-# ================= TRACKERS ==========================
-nuke_tracker = defaultdict(lambda: deque())
-spike_tracker = defaultdict(lambda: deque())
-bot_join_tracker = deque()
-role_backup = {}
-channel_backup = {}
-stats = defaultdict(int)
-attack_profile = defaultdict(lambda: defaultdict(int))
+# ================= TRACKERS ===========================
+everyone_tracker = defaultdict(lambda: deque())
+emoji_tracker = defaultdict(lambda: deque())
+link_tracker = defaultdict(lambda: deque())
+webhook_tracker = defaultdict(lambda: deque())
 
-# ================= SPAM TRACKER ======================
-MESSAGE_LIMIT = 5
-MESSAGE_WINDOW = 15
-spam_tracker = defaultdict(lambda: deque())
-
-# ================= HELPERS ==========================
-def whitelist_mi(member: discord.Member):
+# ================= HELPERS ============================
+def is_whitelisted(member):
     if not member:
         return False
     if member.guild.owner_id == member.id:
         return True
     if member.id in WHITELIST_USERS:
         return True
-    for r in member.roles:
-        if r.name in WHITELIST_ROLES:
-            return True
-    return False
+    return any(r.name in WHITELIST_ROLES for r in member.roles)
 
-async def get_log_channel(guild):
-    ch = discord.utils.get(guild.text_channels, name=LOG_CHANNEL)
+async def log_event(guild, title, desc):
+    ch = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
     if not ch:
-        ch = await guild.create_text_channel(LOG_CHANNEL)
-    return ch
-
-async def log(guild, title, desc):
-    ch = await get_log_channel(guild)
-    embed = discord.Embed(
-        title=title,
-        description=desc,
-        color=discord.Color.dark_red(),
-        timestamp=datetime.datetime.utcnow()
-    )
+        ch = await guild.create_text_channel(LOG_CHANNEL_NAME)
+    embed = discord.Embed(title=title, description=desc, color=discord.Color.red())
     await ch.send(embed=embed)
+    guard_logs.appendleft(f"[{title}] {desc}")
 
-async def ceza(member, sebep):
+async def punish(member, reason):
     try:
-        await member.timeout(datetime.timedelta(minutes=TIMEOUT_MIN), reason=sebep)
+        await member.timeout(datetime.timedelta(minutes=TIMEOUT_MIN), reason=reason)
     except:
         pass
 
-def anti_nuke(uid):
+def spike(tracker, uid, limit, window):
     now = time.time()
-    dq = nuke_tracker[uid]
-    while dq and now - dq[0] > ANTI_NUKE_WINDOW:
+    dq = tracker[uid]
+    while dq and now - dq[0] > window:
         dq.popleft()
     dq.append(now)
-    return len(dq) >= ANTI_NUKE_LIMIT
+    return len(dq) >= limit
 
-def spike(event):
-    now = time.time()
-    dq = spike_tracker[event]
-    while dq and now - dq[0] > SPIKE_WINDOW:
-        dq.popleft()
-    dq.append(now)
-    return len(dq) >= SPIKE_LIMIT
+def emoji_count(text):
+    return len(re.findall(r"[\U00010000-\U0010ffff]", text))
 
-async def backup_guild(guild):
-    role_backup[guild.id] = {r.id: deepcopy(r.permissions) for r in guild.roles}
-    channel_backup[guild.id] = {ch.id: ch.overwrites for ch in guild.channels}
+def has_link(text):
+    return bool(re.search(r"https?://|discord\.gg|www\.", text.lower()))
 
-async def lockdown(guild, sebep):
-    await backup_guild(guild)
-    for ch in guild.channels:
-        try:
-            await ch.set_permissions(guild.default_role, send_messages=False, connect=False)
-        except:
-            pass
-    await log(guild, "☢️ GOD MODE LOCKDOWN", sebep)
-    await dm_alarm(guild, sebep)
-
-async def restore_lockdown(guild):
-    if guild.id not in channel_backup:
-        return False
-    for ch in guild.channels:
-        if ch.id in channel_backup[guild.id]:
-            try:
-                await ch.edit(overwrites=channel_backup[guild.id][ch.id])
-            except:
-                pass
-    for r in guild.roles:
-        if r.id in role_backup.get(guild.id, {}):
-            try:
-                await r.edit(permissions=role_backup[guild.id][r.id])
-            except:
-                pass
-    await log(guild, "🔓 LOCKDOWN KALDIRILDI", "Sunucu eski haline döndü")
-    return True
-
-async def dm_alarm(guild, sebep):
-    if not DM_ALARM:
-        return
-    targets = set()
-    if guild.owner:
-        targets.add(guild.owner)
-    for r in guild.roles:
-        if r.name in WHITELIST_ROLES:
-            for m in r.members:
-                targets.add(m)
-    embed = discord.Embed(
-        title="🚨 GOD MODE GUARD ALARM",
-        description="Sunucu SALDIRI ALTINDA!",
-        color=discord.Color.red()
-    )
-    embed.add_field(name="Sebep", value=sebep, inline=False)
-    for u in targets:
-        try:
-            await u.send(embed=embed)
-        except:
-            pass
-
-# ================= EVENTS ============================
+# ================= EVENTS =============================
 @bot.event
 async def on_ready():
-    print(f"🔥 ULTRA GUARD BOT AKTİF: {bot.user}")
+    print(f"🛡️ ULTRA GUARD v4.6 AKTİF: {bot.user}")
 
-# Spam ve !komutları yakalamak için on_message
 @bot.event
-async def on_message(message: discord.Message):
+async def on_message(message):
     if message.author.bot:
         return
 
-    # Spam tracker
-    now = time.time()
-    dq = spam_tracker[message.author.id]
-    while dq and now - dq[0][1] > MESSAGE_WINDOW:
-        dq.popleft()
-    dq.append((message.content, now))
-    same_messages = [m for m, _ in dq if m == message.content]
-    if len(same_messages) >= MESSAGE_LIMIT and not whitelist_mi(message.author):
-        try:
-            await message.author.timeout(
-                datetime.timedelta(minutes=TIMEOUT_MIN),
-                reason=f"Spam: Aynı mesajı {MESSAGE_LIMIT} kez gönderdi"
-            )
-        except:
-            pass
-        await log(message.guild, "🚫 SPAM GUARD",
-                  f"{message.author.mention} aynı mesajı **{MESSAGE_LIMIT} kez** attı ve timeout aldı.")
-        dq.clear()
+    uid = message.author.id
+    content = message.content
 
-    # Komutların çalışması için
+    if GUARDS["everyone"] and ("@everyone" in content or "@here" in content) and not is_whitelisted(message.author):
+        if spike(everyone_tracker, uid, EVERYONE_LIMIT, EVERYONE_WINDOW):
+            await punish(message.author, "Everyone Spam")
+            await log_event(message.guild, "📢 EVERYONE SPAM", message.author.mention)
+
+    if GUARDS["emoji"] and emoji_count(content) >= EMOJI_LIMIT and not is_whitelisted(message.author):
+        if spike(emoji_tracker, uid, EMOJI_LIMIT, EMOJI_WINDOW):
+            await punish(message.author, "Emoji Spam")
+            await log_event(message.guild, "😈 EMOJI SPAM", message.author.mention)
+
+    if GUARDS["link"] and has_link(content) and not is_whitelisted(message.author):
+        if spike(link_tracker, uid, LINK_LIMIT, LINK_WINDOW):
+            await punish(message.author, "Link Spam")
+            await log_event(message.guild, "🔗 LINK SPAM", message.author.mention)
+
     await bot.process_commands(message)
-
-# Ban, kanal ve bot join guard
-@bot.event
-async def on_member_ban(guild, user):
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
-        if whitelist_mi(entry.user):
-            return
-        await guild.unban(user)
-        await ceza(entry.user, "Ban Nuke")
-        stats["ban"] += 1
-        attack_profile[entry.user.id]["ban"] += 1
-        await log(guild, "🛑 BAN GUARD", entry.user.mention)
-        if anti_nuke(entry.user.id) or spike("ban"):
-            await lockdown(guild, "Ban Nuke Algılandı")
 
 @bot.event
 async def on_guild_channel_delete(channel):
-    async for entry in channel.guild.audit_logs(limit=1):
-        if whitelist_mi(entry.user):
+    if not GUARDS["channel"]:
+        return
+    async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+        if is_whitelisted(entry.user) or entry.user == bot.user:
             return
-        await ceza(entry.user, "Channel Nuke")
-        stats["channel"] += 1
-        attack_profile[entry.user.id]["channel"] += 1
-        await log(channel.guild, "🛑 CHANNEL GUARD", entry.user.mention)
-        if anti_nuke(entry.user.id) or spike("channel"):
-            await lockdown(channel.guild, "Kanal Nuke")
+        await punish(entry.user, "Channel Nuke")
+        await log_event(channel.guild, "🗑️ CHANNEL NUKE", entry.user.mention)
+
+@bot.event
+async def on_guild_role_delete(role):
+    if not GUARDS["role"]:
+        return
+    async for entry in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
+        if is_whitelisted(entry.user) or entry.user == bot.user:
+            return
+        await punish(entry.user, "Role Nuke")
+        await log_event(role.guild, "🧨 ROLE NUKE", entry.user.mention)
+
+@bot.event
+async def on_webhooks_update(channel):
+    if not GUARDS["webhook"]:
+        return
+    async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.webhook_create):
+        if is_whitelisted(entry.user) or entry.user == bot.user:
+            return
+        if spike(webhook_tracker, entry.user.id, WEBHOOK_LIMIT, WEBHOOK_WINDOW):
+            try:
+                for wh in await channel.webhooks():
+                    await wh.delete(reason="Webhook Nuke")
+            except:
+                pass
+            await punish(entry.user, "Webhook Nuke")
+            await log_event(channel.guild, "🔗 WEBHOOK NUKE", entry.user.mention)
 
 @bot.event
 async def on_member_join(member):
-    if member.bot:
-        now = time.time()
-        bot_join_tracker.append(now)
-        while bot_join_tracker and now - bot_join_tracker[0] > BOT_JOIN_WINDOW:
-            bot_join_tracker.popleft()
-        async for entry in member.guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
-            if whitelist_mi(entry.user):
-                return
-            await member.kick(reason="Bot Raid")
-            await ceza(entry.user, "Bot Raid")
-            await log(member.guild, "🤖 BOT RAID", entry.user.mention)
-            if len(bot_join_tracker) >= BOT_JOIN_LIMIT:
-                await lockdown(member.guild, "Bot Raid Tespiti")
+    if not GUARDS["botraid"] or not member.bot:
+        return
+    async for entry in member.guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
+        if is_whitelisted(entry.user):
+            return
+        await member.kick(reason="Bot Raid")
+        await punish(entry.user, "Bot Raid")
+        await log_event(member.guild, "🤖 BOT RAID", entry.user.mention)
 
-# ================== ! KOMUT PANELİ =====================
-@bot.command(name="lockdown")
-async def cmd_lockdown(ctx):
-    if not whitelist_mi(ctx.author):
-        return await ctx.send("❌ Yetki yok")
-    await lockdown(ctx.guild, f"Manuel Lockdown: {ctx.author}")
-    await ctx.send("☢️ Lockdown aktif!")
+# ================= COMMANDS ===========================
+@bot.command()
+async def guardlog(ctx):
+    if not is_whitelisted(ctx.author):
+        return
+    text = "\n".join(list(guard_logs)[:10]) or "Log yok"
+    await ctx.send(f"```{text}```")
 
-@bot.command(name="unlock")
-async def cmd_unlock(ctx):
-    if not whitelist_mi(ctx.author):
-        return await ctx.send("❌ Yetki yok")
-    if await restore_lockdown(ctx.guild):
-        await ctx.send("🔓 Lockdown kaldırıldı")
-    else:
-        await ctx.send("⚠️ Aktif lockdown yok")
-
-@bot.command(name="rapor")
-async def cmd_rapor(ctx):
-    # Grafik oluştur
-    events = ["ban", "channel"]
-    counts = [stats[e] for e in events]
-    plt.bar(events, counts, color=["red", "blue"])
-    plt.title("Guard Bot Saldırı Raporu")
-    plt.ylabel("Olay Sayısı")
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-    plt.close()
-    file = discord.File(buf, filename="rapor.png")
-    embed = discord.Embed(
-        title="📊 Saldırı Raporu",
-        description="Sunucudaki guard istatistikleri",
-        color=discord.Color.dark_blue(),
-        timestamp=datetime.datetime.utcnow()
-    )
-    embed.set_image(url="attachment://rapor.png")
-    await ctx.send(embed=embed, file=file)
+@bot.command()
+async def whitelist(ctx):
+    if not is_whitelisted(ctx.author):
+        return
+    users = ", ".join([f"<@{u}>" for u in WHITELIST_USERS]) or "Yok"
+    roles = ", ".join(WHITELIST_ROLES)
+    await ctx.send(f"👤 Users: {users}\n🎭 Roles: {roles}")
 
 # ================= RUN ================================
 bot.run(TOKEN)
