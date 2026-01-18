@@ -1,3 +1,3 @@
 discord.py
-matplotlib
-flask
+pillow
+psutil
