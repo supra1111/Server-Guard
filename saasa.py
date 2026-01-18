@@ -49,7 +49,7 @@ trackers = {
 guard_logs = deque(maxlen=200)
 
 # ================= HELPERS =================
-def is_whitelisted(member):
+def is_whitelisted(member: discord.Member):
     if member.guild.owner_id == member.id:
         return True
     if member.id in WHITELIST_USERS:
@@ -87,8 +87,8 @@ async def create_card(member, title, reason):
     avatar_bytes = await member.display_avatar.replace(size=128).read()
     avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((96, 96))
 
-    base = Image.new("RGBA", (700, 220), (30, 30, 60))
-    bg = base.filter(ImageFilter.GaussianBlur(8))
+    base = Image.new("RGBA", (700, 220), (25, 25, 40))
+    bg = base.filter(ImageFilter.GaussianBlur(6))
     bg.paste(base, (0, 0))
 
     draw = ImageDraw.Draw(bg)
@@ -109,7 +109,7 @@ async def log_guard(guild, member, title, reason):
     await ch.send(file=discord.File(card, "guard.png"))
     guard_logs.appendleft(f"{title} | {member}")
 
-# ================= BUTTONS =================
+# ================= BUTTON PANELS =================
 class GuardPanel(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -130,13 +130,33 @@ class GuardPanel(ui.View):
     @ui.button(label="LINK", style=ButtonStyle.primary)
     async def link(self, i, b): await self.toggle(i, "link")
 
-    @ui.button(label="BOT RAID", style=ButtonStyle.primary)
+    @ui.button(label="BOT RAID", style=ButtonStyle.danger)
     async def botraid(self, i, b): await self.toggle(i, "botraid")
+
+
+class WhitelistPanel(ui.View):
+    def __init__(self, target: discord.Member):
+        super().__init__(timeout=30)
+        self.target = target
+
+    @ui.button(label="✅ Whitelist Ekle", style=ButtonStyle.success)
+    async def add(self, interaction, button):
+        WHITELIST_USERS.add(self.target.id)
+        await interaction.response.send_message(
+            f"{self.target.mention} whitelist **eklendi**", ephemeral=True
+        )
+
+    @ui.button(label="❌ Whitelist Çıkar", style=ButtonStyle.danger)
+    async def remove(self, interaction, button):
+        WHITELIST_USERS.discard(self.target.id)
+        await interaction.response.send_message(
+            f"{self.target.mention} whitelist **çıkarıldı**", ephemeral=True
+        )
 
 # ================= EVENTS =================
 @bot.event
 async def on_ready():
-    print("🛡️ ULTRA GUARD v7.0 AKTİF")
+    print("🛡️ ULTRA GUARD v7.1 AKTİF")
 
 @bot.event
 async def on_message(message):
@@ -163,60 +183,28 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ================= GUARDS =================
-@bot.event
-async def on_guild_channel_delete(channel):
-    if not GUARDS["channel"]:
-        return
-    async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
-        if is_whitelisted(entry.user): return
-        await punish(entry.user, "Channel Nuke")
-        await log_guard(channel.guild, entry.user, "CHANNEL NUKE", "Kanal silme")
-
-@bot.event
-async def on_guild_role_delete(role):
-    if not GUARDS["role"]:
-        return
-    async for entry in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
-        if is_whitelisted(entry.user): return
-        await punish(entry.user, "Role Nuke")
-        await log_guard(role.guild, entry.user, "ROLE NUKE", "Rol silme")
-
-@bot.event
-async def on_webhooks_update(channel):
-    if not GUARDS["webhook"]:
-        return
-    async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.webhook_create):
-        if is_whitelisted(entry.user): return
-        await punish(entry.user, "Webhook Nuke")
-        await log_guard(channel.guild, entry.user, "WEBHOOK NUKE", "Webhook spam")
-
-@bot.event
-async def on_member_join(member):
-    if not GUARDS["botraid"] or not member.bot:
-        return
-    async for entry in member.guild.audit_logs(limit=1, action=discord.AuditLogAction.bot_add):
-        if is_whitelisted(entry.user): return
-        await member.kick(reason="Bot Raid")
-        await punish(entry.user, "Bot Raid")
-        await log_guard(member.guild, entry.user, "BOT RAID", "İzinsiz bot")
-
-# ================= COMMANDS (30+) =================
+# ================= COMMANDS =================
 @bot.command()
 async def guard(ctx):
-    await ctx.send("🛡️ **Ultra Guard Panel**", view=GuardPanel())
+    await ctx.send("🛡️ **Ultra Guard Kontrol Paneli**", view=GuardPanel())
 
 @bot.command()
-async def ping(ctx): await ctx.send("🏓 Pong")
+async def whitelist(ctx, user: discord.Member):
+    if not ctx.author.guild_permissions.administrator:
+        return
+    await ctx.send(
+        f"👤 **{user} için whitelist işlemi**",
+        view=WhitelistPanel(user)
+    )
 
 @bot.command()
-async def uptime(ctx): await ctx.send(f"⏱ {int(time.time()-START_TIME)} saniye")
-
-@bot.command()
-async def cpu(ctx): await ctx.send(f"CPU: {psutil.cpu_percent()}%")
-
-@bot.command()
-async def ram(ctx): await ctx.send(f"RAM: {psutil.virtual_memory().percent}%")
+async def stats(ctx):
+    await ctx.send(
+        f"🖥️ **Sistem Bilgisi**\n"
+        f"CPU: {psutil.cpu_percent()}%\n"
+        f"RAM: {psutil.virtual_memory().percent}%\n"
+        f"Uptime: {int(time.time()-START_TIME)} sn"
+    )
 
 @bot.command()
 async def avatar(ctx, user: discord.Member = None):
@@ -224,25 +212,9 @@ async def avatar(ctx, user: discord.Member = None):
     await ctx.send(user.display_avatar.url)
 
 @bot.command()
-async def whitelistadd(ctx, user: discord.Member):
-    WHITELIST_USERS.add(user.id)
-    await ctx.send("✅ Whitelist eklendi")
-
-@bot.command()
-async def whitelistrm(ctx, user: discord.Member):
-    WHITELIST_USERS.discard(user.id)
-    await ctx.send("❌ Whitelist çıkarıldı")
-
-@bot.command()
 async def guardlog(ctx):
     text = "\n".join(list(guard_logs)[:10]) or "Log yok"
     await ctx.send(f"```{text}```")
-
-# ---- EXTRA 20 KOMUT ----
-for i in range(1, 21):
-    async def extra(ctx, i=i):
-        await ctx.send(f"Ek komut {i}")
-    bot.command(name=f"extra{i}")(extra)
 
 # ================= RUN =================
 bot.run(TOKEN)
