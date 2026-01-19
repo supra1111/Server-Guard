@@ -7,7 +7,7 @@ import time
 import matplotlib.pyplot as plt
 
 # ================= AYARLAR =================
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+TOKEN = os.getenv("MTQ2MjA5MTc0NDIyMDAyMDk4MQ.GhWopT.pqao8T1Yb_5qF6Qlm5sAGT_v73fpYLFmmGox-A")
 if not TOKEN or TOKEN == "TOKEN_BURAYA":
     raise ValueError("❌ Bot tokeni geçersiz veya boş. Lütfen .env dosyasına ekleyin veya TOKEN değişkenini güncelleyin.")
 
