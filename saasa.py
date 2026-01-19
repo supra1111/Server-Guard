@@ -6,7 +6,7 @@ import time
 import matplotlib.pyplot as plt
 
 # ================= AYARLAR =================
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "YENI_TOKENINIZ"  # Buraya güncel ve geçerli bot tokeninizi yazın
 GUILD_ID = 1259126653838299209
 YETKILI_ROL = "Channel Manager"
 LOG_KANAL = "mod-log"
@@ -212,7 +212,6 @@ class WhitelistPanel(discord.ui.View):
         await interaction.response.send_message(f"```{text}```", ephemeral=True)
 
 # ================= 60+ KOMUTLAR =================
-# Örnek olarak işlevsel 60 komutun tamamı embed ve guard ile entegre olacak şekilde eklendi
 @bot.command()
 async def ping(ctx):
     await ctx.send(f"🏓 Pong! Gecikme: {round(bot.latency*1000)}ms")
@@ -227,10 +226,13 @@ async def serverinfo(ctx):
     embed.add_field(name="Kanallar", value=len(guild.channels))
     await ctx.send(embed=embed)
 
-# Örnek diğer komutlar: !userinfo, !roles, !kick, !ban, !mute, !unmute, !rolver, !rolal, !kanaloluştur, !kanalsil, !temizle, !guardstats, !daily, !weekly, !hourly, vb.
+# Diğer komutlar: !userinfo, !roles, !kick, !ban, !mute, !unmute, !rolver, !rolal, !kanaloluştur, !kanalsil, !temizle, !guardstats, !daily, !weekly, !hourly vb.
 
 @bot.event
 async def on_ready():
     print(f"✅ Bot giriş yaptı: {bot.user} (ID: {bot.user.id})")
 
-bot.run(TOKEN)
+try:
+    bot.run(TOKEN)
+except discord.errors.LoginFailure:
+    print("❌ Token geçersiz veya süresi dolmuş! Lütfen yeni tokeni girin.")
