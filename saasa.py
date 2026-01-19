@@ -1,257 +1,275 @@
 import discord
 from discord.ext import commands
-import asyncio
-import datetime
-from collections import defaultdict
-import time
-import matplotlib.pyplot as plt
+from discord import ui, ButtonStyle
+import datetime, time, os, re, io, psutil
+from collections import defaultdict, deque
+from PIL import Image, ImageDraw, ImageFilter
 
-# ================= AYARLAR =================
-TOKEN = "YOUR_TOKEN_HERE"
-GUILD_ID = 1259126653838299209
-YETKILI_ROL = "Channel Manager"
-LOG_KANAL = "mod-log"
-TIMEOUT_DK = 1
-ANTI_NUKE_LIMIT = 5
-ANTI_NUKE_TIME = 60
-SPIKE_TIME_WINDOW = 60
-SPIKE_THRESHOLD = 5
-ALARM_DM = True
+# ================= CONFIG =================
+TOKEN = os.getenv("TOKEN")
+PREFIX = "!"
+LOG_CHANNEL = "ultra-guard-log"
+TIMEOUT_MIN = 15
+START_TIME = time.time()
 
-# ================= WHITELIST =================
-WHITELIST_USERS = [123456789012345678]
-WHITELIST_ROLES = ["Founder", "Admin"]
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+intents.guilds = True
+intents.webhooks = True
 
-# ================= İSTATİSTİK =================
-stats = {"spam":0,"kanal":0,"rol":0,"ban":0,"bot":0,"yetki":0,"webhook":0}
-daily_stats = defaultdict(int)
-weekly_stats = defaultdict(int)
-hourly_stats = defaultdict(int)
-nuke_log = defaultdict(list)
-ceza_puani = defaultdict(int)
-spike_events = defaultdict(list)
-role_backup = {}
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
-# ================= INTENTS =================
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+# ================= DATA =================
+WHITELIST_USERS = set()
+WHITELIST_ROLES = {"Founder", "Owner", "Admin"}
 
-# ================= YARDIMCI FONKSİYONLAR =================
-def whitelist_mi(member):
-    if member.guild.owner_id == member.id: return True
-    if member.id in WHITELIST_USERS: return True
-    for rol in member.roles:
-        if rol.name in WHITELIST_ROLES: return True
-    return False
+GUARDS = {
+    "everyone": True,
+    "emoji": True,
+    "link": True,
+    "channel": True,
+    "role": True,
+    "webhook": True,
+    "botraid": True
+}
 
-async def log(guild, title, desc):
-    kanal = discord.utils.get(guild.text_channels, name=LOG_KANAL)
-    if not kanal:
-        kanal = await guild.create_text_channel(LOG_KANAL)
-    embed = discord.Embed(title=title, description=desc, color=discord.Color.red(), timestamp=datetime.datetime.utcnow())
-    await kanal.send(embed=embed)
+LIMITS = {
+    "everyone": (3, 15),
+    "emoji": (6, 10),
+    "link": (3, 15)
+}
 
-async def ceza(member, sebep):
+trackers = {
+    "everyone": defaultdict(lambda: deque()),
+    "emoji": defaultdict(lambda: deque()),
+    "link": defaultdict(lambda: deque())
+}
+
+guard_logs = deque(maxlen=200)
+
+# ================= HELPERS =================
+def is_whitelisted(member: discord.Member):
+    if member.guild.owner_id == member.id:
+        return True
+    if member.id in WHITELIST_USERS:
+        return True
+    return any(r.name in WHITELIST_ROLES for r in member.roles)
+
+def spike(tracker, uid, limit, window):
+    now = time.time()
+    dq = tracker[uid]
+    while dq and now - dq[0] > window:
+        dq.popleft()
+    dq.append(now)
+    return len(dq) >= limit
+
+def emoji_count(text):
+    return len(re.findall(r"[\U00010000-\U0010ffff]", text))
+
+def has_link(text):
+    return bool(re.search(r"https?://|discord\.gg|www\.", text.lower()))
+
+async def punish(member, reason):
     try:
-        await member.timeout(datetime.timedelta(minutes=TIMEOUT_DK), reason=sebep)
+        await member.timeout(datetime.timedelta(minutes=TIMEOUT_MIN), reason=reason)
     except:
         pass
 
-def kaydet(event):
-    gun = datetime.date.today().isoformat()
-    hafta = datetime.date.today().strftime("%Y-%W")
-    daily_stats[f"{gun}-{event}"] += 1
-    weekly_stats[f"{hafta}-{event}"] += 1
+async def get_log_channel(guild):
+    ch = discord.utils.get(guild.text_channels, name=LOG_CHANNEL)
+    if not ch:
+        ch = await guild.create_text_channel(LOG_CHANNEL)
+    return ch
 
-def saatlik_kaydet(event):
-    saat = datetime.datetime.now().strftime("%Y-%m-%d %H")
-    hourly_stats[f"{saat}-{event}"] += 1
+# ================= GIF CARD LOG =================
+async def create_gif_card(member, title, reason):
+    frames = []
+    avatar_bytes = await member.display_avatar.replace(size=128).read()
+    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((96, 96))
 
-def anti_nuke_check(user_id):
-    now = time.time()
-    nuke_log[user_id] = [t for t in nuke_log[user_id] if now - t < ANTI_NUKE_TIME]
-    nuke_log[user_id].append(now)
-    return len(nuke_log[user_id]) >= ANTI_NUKE_LIMIT
+    for i in range(8):
+        base = Image.new("RGBA", (720, 240), (20+i*2, 20+i*2, 40+i*3))
+        bg = base.filter(ImageFilter.GaussianBlur(4))
+        draw = ImageDraw.Draw(bg)
 
-def spike_kontrol(event, user_id):
-    now = time.time()
-    spike_events[event] = [t for t in spike_events[event] if now - t < SPIKE_TIME_WINDOW]
-    spike_events[event].append(now)
-    return len(spike_events[event]) >= SPIKE_THRESHOLD
+        bg.paste(avatar, (30, 70), avatar)
+        draw.text((150, 40), title, fill="white")
+        draw.text((150, 95), f"Kullanıcı: {member}", fill="#cccccc")
+        draw.text((150, 135), f"Sebep: {reason}", fill="#ff5555")
 
-async def cezalandir(member, sebep):
-    ceza_puani[member.id] += 1
-    puan = ceza_puani[member.id]
-    if puan == 1:
-        await member.timeout(datetime.timedelta(minutes=1), reason=sebep)
-    elif puan == 2:
-        await member.kick(reason=sebep)
-    else:
-        await member.ban(reason=sebep)
+        frames.append(bg)
 
-# ================= YEDEKLEME & SAVUNMA =================
-async def yedek_al(guild):
-    role_backup[guild.id] = {}
-    for role in guild.roles:
-        role_backup[guild.id][role.id] = role.permissions
-
-async def savunma_modu(guild, sebep):
-    await yedek_al(guild)
-    for role in guild.roles:
-        if role.permissions.administrator or role.permissions.manage_roles or role.permissions.manage_channels:
-            perms = role.permissions
-            perms.update(administrator=False, manage_roles=False, manage_channels=False)
-            try:
-                await role.edit(permissions=perms)
-            except:
-                pass
-    await log(guild, "☢️ SAVUNMA MODU AÇILDI", f"Sebep: {sebep}")
-    await savunma_alarm_dm(guild, sebep)
-
-async def savunma_kapat(guild):
-    if guild.id not in role_backup:
-        return False
-    for role in guild.roles:
-        if role.id in role_backup[guild.id]:
-            try:
-                await role.edit(permissions=role_backup[guild.id][role.id])
-            except:
-                pass
-    await log(guild, "🔓 SAVUNMA MODU KAPATILDI", "Yetkiler geri yüklendi")
-    return True
-
-async def alarm_listesi(guild):
-    alicilar = set()
-    if guild.owner:
-        alicilar.add(guild.owner)
-    for uid in WHITELIST_USERS:
-        member = guild.get_member(uid)
-        if member: alicilar.add(member)
-    for role in guild.roles:
-        if role.name in WHITELIST_ROLES:
-            for member in role.members:
-                alicilar.add(member)
-    return alicilar
-
-async def savunma_alarm_dm(guild, sebep):
-    if not ALARM_DM:
-        return
-    alicilar = await alarm_listesi(guild)
-    embed = discord.Embed(
-        title="☢️ SAVUNMA MODU AKTİF",
-        description="Sunucu otomatik olarak korumaya alındı!",
-        color=discord.Color.red(),
-        timestamp=datetime.datetime.utcnow()
+    buf = io.BytesIO()
+    frames[0].save(
+        buf,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=120,
+        loop=0
     )
-    embed.add_field(name="Sunucu", value=guild.name, inline=False)
-    embed.add_field(name="Sebep", value=sebep, inline=False)
-    embed.add_field(name="Durum", value="Yetkiler geçici olarak kısıtlandı", inline=False)
-    for uye in alicilar:
-        try:
-            await uye.send(embed=embed)
-        except:
-            pass
+    buf.seek(0)
+    return buf
 
-# ================= GRAFİK =================
-def grafik_olustur(mod="genel"):
-    if mod == "gunluk":
-        data = daily_stats
-        baslik = "📅 Günlük Guard İstatistikleri"
-    elif mod == "haftalik":
-        data = weekly_stats
-        baslik = "🗓️ Haftalık Guard İstatistikleri"
-    elif mod == "saatlik":
-        data = hourly_stats
-        baslik = "⏰ Saatlik Guard İstatistikleri"
-    else:
-        data = stats
-        baslik = "📊 Genel Guard İstatistikleri"
-    keys = list(data.keys())[-24:]
-    values = list(data.values())[-24:]
-    plt.figure(figsize=(12,5))
-    plt.plot(keys, values, marker="o", linestyle='-', color='blue')
-    plt.fill_between(keys, values, color='lightblue', alpha=0.3)
-    plt.xticks(rotation=45, ha="right")
-    plt.title(baslik)
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.tight_layout()
-    dosya = f"guard_{mod}.png"
-    plt.savefig(dosya)
-    plt.close()
-    return dosya
+async def log_guard(guild, member, title, reason):
+    ch = await get_log_channel(guild)
+    gif = await create_gif_card(member, title, reason)
+    await ch.send(file=discord.File(gif, "guard.gif"))
+    guard_logs.appendleft(f"{title} | {member}")
 
-# ================= PANEL VE UI =================
-class SavunmaPanel(discord.ui.View):
+# ================= BUTTON PANELS =================
+class GuardPanel(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-    @discord.ui.button(label="🔓 Savunmayı Kapat", style=discord.ButtonStyle.success)
-    async def kapat(self, interaction, button):
-        if not whitelist_mi(interaction.user):
-            return await interaction.response.send_message("❌ Yetkin yok", ephemeral=True)
-        basarili = await savunma_kapat(interaction.guild)
-        if basarili:
-            await interaction.response.send_message("✅ Savunma modu kapatıldı", ephemeral=True)
-        else:
-            await interaction.response.send_message("⚠️ Aktif savunma modu yok", ephemeral=True)
 
-class WhitelistPanel(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    @discord.ui.button(label="➕ Ekle", style=discord.ButtonStyle.success)
-    async def ekle(self, interaction, button):
-        if interaction.user.id not in WHITELIST_USERS:
-            WHITELIST_USERS.append(interaction.user.id)
-        await interaction.response.send_message("✅ Whitelist eklendi", ephemeral=True)
-    @discord.ui.button(label="➖ Çıkar", style=discord.ButtonStyle.danger)
-    async def cikar(self, interaction, button):
-        if interaction.user.id in WHITELIST_USERS:
-            WHITELIST_USERS.remove(interaction.user.id)
-        await interaction.response.send_message("❌ Whitelist çıkarıldı", ephemeral=True)
-    @discord.ui.button(label="📋 Liste", style=discord.ButtonStyle.primary)
-    async def liste(self, interaction, button):
-        text = "\n".join(str(i) for i in WHITELIST_USERS)
-        await interaction.response.send_message(f"```{text}```", ephemeral=True)
+    async def toggle(self, interaction, guard):
+        GUARDS[guard] = not GUARDS[guard]
+        await interaction.response.send_message(
+            f"🛡️ {guard.upper()} ➜ {'AÇIK' if GUARDS[guard] else 'KAPALI'}",
+            ephemeral=True
+        )
 
-# ================= 60+ KOMUTLAR =================
+    @ui.button(label="EVERYONE", style=ButtonStyle.primary)
+    async def everyone(self, i, b): await self.toggle(i, "everyone")
+
+    @ui.button(label="EMOJI", style=ButtonStyle.primary)
+    async def emoji(self, i, b): await self.toggle(i, "emoji")
+
+    @ui.button(label="LINK", style=ButtonStyle.primary)
+    async def link(self, i, b): await self.toggle(i, "link")
+
+    @ui.button(label="BOT RAID", style=ButtonStyle.danger)
+    async def botraid(self, i, b): await self.toggle(i, "botraid")
+
+
+class WhitelistPanel(ui.View):
+    def __init__(self, target):
+        super().__init__(timeout=30)
+        self.target = target
+
+    @ui.button(label="✅ Ekle", style=ButtonStyle.success)
+    async def add(self, i, b):
+        WHITELIST_USERS.add(self.target.id)
+        await i.response.send_message("Whitelist eklendi", ephemeral=True)
+
+    @ui.button(label="❌ Sil", style=ButtonStyle.danger)
+    async def remove(self, i, b):
+        WHITELIST_USERS.discard(self.target.id)
+        await i.response.send_message("Whitelist silindi", ephemeral=True)
+
+# ================= EVENTS =================
+@bot.event
+async def on_ready():
+    print("🛡️ ULTRA GUARD v8 AKTİF")
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    uid = message.author.id
+    c = message.content
+
+    if GUARDS["everyone"] and ("@everyone" in c or "@here" in c) and not is_whitelisted(message.author):
+        if spike(trackers["everyone"], uid, *LIMITS["everyone"]):
+            await punish(message.author, "Everyone Spam")
+            await log_guard(message.guild, message.author, "EVERYONE SPAM", "Yetkisiz ping")
+
+    if GUARDS["emoji"] and emoji_count(c) >= 6 and not is_whitelisted(message.author):
+        if spike(trackers["emoji"], uid, *LIMITS["emoji"]):
+            await punish(message.author, "Emoji Spam")
+            await log_guard(message.guild, message.author, "EMOJI SPAM", "Emoji flood")
+
+    if GUARDS["link"] and has_link(c) and not is_whitelisted(message.author):
+        if spike(trackers["link"], uid, *LIMITS["link"]):
+            await punish(message.author, "Link Spam")
+            await log_guard(message.guild, message.author, "LINK SPAM", "Link flood")
+
+    await bot.process_commands(message)
+
+# ================= 30+ KOMUT =================
 @bot.command()
-async def ping(ctx):
-    await ctx.send(f"🏓 Pong! Gecikme: {round(bot.latency*1000)}ms")
+async def guard(ctx): await ctx.send("🛡️ Guard Panel", view=GuardPanel())
+
+@bot.command()
+async def whitelist(ctx, user: discord.Member):
+    await ctx.send(f"{user} whitelist", view=WhitelistPanel(user))
+
+@bot.command()
+async def ping(ctx): await ctx.send("🏓 Pong")
+
+@bot.command()
+async def uptime(ctx): await ctx.send(f"{int(time.time()-START_TIME)} saniye")
+
+@bot.command()
+async def cpu(ctx): await ctx.send(f"CPU {psutil.cpu_percent()}%")
+
+@bot.command()
+async def ram(ctx): await ctx.send(f"RAM {psutil.virtual_memory().percent}%")
+
+@bot.command()
+async def avatar(ctx, u: discord.Member=None):
+    u = u or ctx.author
+    await ctx.send(u.display_avatar.url)
+
+@bot.command()
+async def ban(ctx, m: discord.Member): await m.ban()
+
+@bot.command()
+async def kick(ctx, m: discord.Member): await m.kick()
+
+@bot.command()
+async def timeout(ctx, m: discord.Member, dk:int):
+    await m.timeout(datetime.timedelta(minutes=dk))
+
+@bot.command()
+async def untimeout(ctx, m: discord.Member):
+    await m.timeout(None)
+
+@bot.command()
+async def purge(ctx, s:int):
+    await ctx.channel.purge(limit=s+1)
+
+@bot.command()
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+
+@bot.command()
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+
+@bot.command()
+async def slowmode(ctx, s:int):
+    await ctx.channel.edit(slowmode_delay=s)
+
+@bot.command()
+async def say(ctx, *, t):
+    await ctx.message.delete()
+    await ctx.send(t)
 
 @bot.command()
 async def serverinfo(ctx):
-    guild = ctx.guild
-    embed = discord.Embed(title=f"{guild.name} Bilgileri", color=discord.Color.blue(), timestamp=datetime.datetime.utcnow())
-    embed.add_field(name="Sunucu ID", value=guild.id)
-    embed.add_field(name="Üye Sayısı", value=guild.member_count)
-    embed.add_field(name="Rol Sayısı", value=len(guild.roles))
-    embed.add_field(name="Kanallar", value=len(guild.channels))
-    await ctx.send(embed=embed)
+    g=ctx.guild
+    await ctx.send(f"{g.name} | {g.member_count} üye")
 
 @bot.command()
-async def userinfo(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    embed = discord.Embed(title=f"{member}", color=discord.Color.green(), timestamp=datetime.datetime.utcnow())
-    embed.add_field(name="ID", value=member.id)
-    embed.add_field(name="Hesap Oluşturma", value=member.created_at.strftime("%d/%m/%Y"))
-    embed.add_field(name="Katılma Tarihi", value=member.joined_at.strftime("%d/%m/%Y") if member.joined_at else "Bilinmiyor")
-    await ctx.send(embed=embed)
+async def userinfo(ctx, u:discord.Member=None):
+    u=u or ctx.author
+    await ctx.send(f"{u} | {u.id}")
 
 @bot.command()
-async def roles(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    embed = discord.Embed(title=f"{member} rolleri", color=discord.Color.purple())
-    embed.add_field(name="Roller", value=", ".join([r.name for r in member.roles if r.name != "@everyone"]) or "Yok")
-    await ctx.send(embed=embed)
+async def roleinfo(ctx, r:discord.Role):
+    await ctx.send(f"{r.name} | {len(r.members)}")
 
-# Kick, Ban, Mute, Unmute, Rolver, Rolal, Kanaloluştur, Kanalsil, Temizle vb. tüm komutlar bu mantıkla eklenebilir
-# Guardstats, daily, weekly, hourly da aynı mantıkta embed ile gösterilir
+@bot.command()
+async def channelinfo(ctx):
+    c=ctx.channel
+    await ctx.send(f"{c.name} | {c.id}")
 
-@bot.event
-async def on_ready():
-    print(f"✅ Bot giriş yaptı: {bot.user} (ID: {bot.user.id})")
+@bot.command()
+async def guardlog(ctx):
+    await ctx.send("\n".join(list(guard_logs)[:10]) or "Log yok")
 
-async def main():
-    async with bot:
-        await bot.start(TOKEN)
-
-asyncio.run(main())
+# ================= RUN =================
+bot.run(TOKEN)
