@@ -4,9 +4,10 @@ import datetime
 from collections import defaultdict
 import time
 import matplotlib.pyplot as plt
+import asyncio
 
 # ================= AYARLAR =================
-TOKEN = "YENI_TOKENINIZ"  # Buraya güncel ve geçerli bot tokeninizi yazın
+TOKEN = "YENI_TOKENINIZ"  # Buraya geçerli tokeninizi yazın
 GUILD_ID = 1259126653838299209
 YETKILI_ROL = "Channel Manager"
 LOG_KANAL = "mod-log"
@@ -228,11 +229,10 @@ async def serverinfo(ctx):
 
 # Diğer komutlar: !userinfo, !roles, !kick, !ban, !mute, !unmute, !rolver, !rolal, !kanaloluştur, !kanalsil, !temizle, !guardstats, !daily, !weekly, !hourly vb.
 
-@bot.event
-async def on_ready():
-    print(f"✅ Bot giriş yaptı: {bot.user} (ID: {bot.user.id})")
+# ================= BOT BAŞLATMA =================
+async def main():
+    async with bot:
+        await bot.start(TOKEN)
 
-try:
-    bot.run(TOKEN)
-except discord.errors.LoginFailure:
-    print("❌ Token geçersiz veya süresi dolmuş! Lütfen yeni tokeni girin.")
+if __name__ == "__main__":
+    asyncio.run(main())
