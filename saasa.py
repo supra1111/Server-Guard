@@ -1,13 +1,16 @@
+import os
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import datetime
 from collections import defaultdict
 import time
 import matplotlib.pyplot as plt
-import os
 
 # ================= AYARLAR =================
-TOKEN = "TOKEN_BURAYA"
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+if not TOKEN or TOKEN == "TOKEN_BURAYA":
+    raise ValueError("❌ Bot tokeni geçersiz veya boş. Lütfen .env dosyasına ekleyin veya TOKEN değişkenini güncelleyin.")
+
 GUILD_ID = 1259126653838299209
 YETKILI_ROL = "Channel Manager"
 LOG_KANAL = "mod-log"
@@ -276,7 +279,6 @@ async def on_guild_role_delete(role):
         saatlik_kaydet("rol")
 
 # ================= KOMUTLAR =================
-# 1-60+ gerçek işlevli komutları burada ekliyoruz
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send(f"🏓 Pong! Gecikme: {round(bot.latency*1000)}ms")
@@ -295,10 +297,12 @@ async def serverinfo(ctx):
         embed.set_image(url=guild.banner.url)
     await ctx.send(embed=embed)
 
-# Buradan itibaren diğer 60+ komut:
-# !userinfo, !roles, !kick, !ban, !mute, !unmute, !rolver, !rolal, !kanaloluştur, !kanalsil
-# !temizle, !guardstats, !guardpanel, !whitelistpanel, !savunmapanel
-# !daily, !weekly, !hourly stats komutları ve 40+ diğer bilgi/yonetim komutları
-# Hepsi mantık olarak yukarıdaki serverinfo/ping gibi embed + guard entegre şekilde yapılacak.
+# Buradan itibaren diğer 60+ komut aynı mantıkla eklenebilir: !userinfo, !roles, !kick, !ban, !mute, !unmute, !rolver, !rolal, !kanaloluştur, !kanalsil, !temizle, !guardstats, !guardpanel, !whitelistpanel, !savunmapanel, daily/weekly/hourly stats vb.
 
+# ================= BOT EVENTLERİ =================
+@bot.event
+async def on_ready():
+    print(f"✅ Bot giriş yaptı: {bot.user} (ID: {bot.user.id})")
+
+# ================= BOTU ÇALIŞTIR =================
 bot.run(TOKEN)
