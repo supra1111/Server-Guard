@@ -1,13 +1,13 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
+import asyncio
 import datetime
 from collections import defaultdict
 import time
 import matplotlib.pyplot as plt
-import asyncio
 
 # ================= AYARLAR =================
-TOKEN = "YENI_TOKENINIZ"  # Buraya geçerli tokeninizi yazın
+TOKEN = "YOUR_TOKEN_HERE"
 GUILD_ID = 1259126653838299209
 YETKILI_ROL = "Channel Manager"
 LOG_KANAL = "mod-log"
@@ -54,8 +54,8 @@ async def log(guild, title, desc):
 async def ceza(member, sebep):
     try:
         await member.timeout(datetime.timedelta(minutes=TIMEOUT_DK), reason=sebep)
-    except Exception as e:
-        print(f"Ceza uygulanamadı: {e}")
+    except:
+        pass
 
 def kaydet(event):
     gun = datetime.date.today().isoformat()
@@ -103,8 +103,8 @@ async def savunma_modu(guild, sebep):
             perms.update(administrator=False, manage_roles=False, manage_channels=False)
             try:
                 await role.edit(permissions=perms)
-            except Exception as e:
-                print(f"Yetki kısıtlanamadı: {e}")
+            except:
+                pass
     await log(guild, "☢️ SAVUNMA MODU AÇILDI", f"Sebep: {sebep}")
     await savunma_alarm_dm(guild, sebep)
 
@@ -115,8 +115,8 @@ async def savunma_kapat(guild):
         if role.id in role_backup[guild.id]:
             try:
                 await role.edit(permissions=role_backup[guild.id][role.id])
-            except Exception as e:
-                print(f"Yetki geri yüklenemedi: {e}")
+            except:
+                pass
     await log(guild, "🔓 SAVUNMA MODU KAPATILDI", "Yetkiler geri yüklendi")
     return True
 
@@ -149,8 +149,8 @@ async def savunma_alarm_dm(guild, sebep):
     for uye in alicilar:
         try:
             await uye.send(embed=embed)
-        except Exception as e:
-            print(f"DM gönderilemedi: {e}")
+        except:
+            pass
 
 # ================= GRAFİK =================
 def grafik_olustur(mod="genel"):
@@ -227,12 +227,31 @@ async def serverinfo(ctx):
     embed.add_field(name="Kanallar", value=len(guild.channels))
     await ctx.send(embed=embed)
 
-# Diğer komutlar: !userinfo, !roles, !kick, !ban, !mute, !unmute, !rolver, !rolal, !kanaloluştur, !kanalsil, !temizle, !guardstats, !daily, !weekly, !hourly vb.
+@bot.command()
+async def userinfo(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    embed = discord.Embed(title=f"{member}", color=discord.Color.green(), timestamp=datetime.datetime.utcnow())
+    embed.add_field(name="ID", value=member.id)
+    embed.add_field(name="Hesap Oluşturma", value=member.created_at.strftime("%d/%m/%Y"))
+    embed.add_field(name="Katılma Tarihi", value=member.joined_at.strftime("%d/%m/%Y") if member.joined_at else "Bilinmiyor")
+    await ctx.send(embed=embed)
 
-# ================= BOT BAŞLATMA =================
+@bot.command()
+async def roles(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    embed = discord.Embed(title=f"{member} rolleri", color=discord.Color.purple())
+    embed.add_field(name="Roller", value=", ".join([r.name for r in member.roles if r.name != "@everyone"]) or "Yok")
+    await ctx.send(embed=embed)
+
+# Kick, Ban, Mute, Unmute, Rolver, Rolal, Kanaloluştur, Kanalsil, Temizle vb. tüm komutlar bu mantıkla eklenebilir
+# Guardstats, daily, weekly, hourly da aynı mantıkta embed ile gösterilir
+
+@bot.event
+async def on_ready():
+    print(f"✅ Bot giriş yaptı: {bot.user} (ID: {bot.user.id})")
+
 async def main():
     async with bot:
         await bot.start(TOKEN)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
